@@ -20,6 +20,7 @@ import android.view.Surface
 import android.view.SurfaceView
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
+import com.google.android.material.snackbar.Snackbar
 import com.novikov.faceidentifier.databinding.ActivityMainBinding
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -80,7 +81,6 @@ class MainActivity : AppCompatActivity() {
 
                 //Задержка необходимая для открытия камеры (пока костыль)
                 Handler().postDelayed({
-
                     binding.mainSurfaceView.holder.setSizeFromLayout()
 
                     Log.i("cameraDevice", cameraDevice.toString())
@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
                             val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                             builder.addTarget(binding.mainSurfaceView.holder.surface)
                             builder.addTarget(imageReader.surface)
-                            builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                            builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
                             //Отправка повторяющегося запроса
                             session.setRepeatingRequest(builder.build(), object :
                                 CameraCaptureSession.CaptureCallback() {
@@ -111,15 +111,19 @@ class MainActivity : AppCompatActivity() {
 
                 }, 1000)
 
-                //Слушателль доступности картинки из считывателя
+                //Слушатель доступности картинки из считывателя
                 imageReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener {
                     //Обработку изображения пихать сюда скорее всего
                     override fun onImageAvailable(reader: ImageReader?) {
                         val image = reader!!.acquireLatestImage()
 
                         val buffer = image.planes[0].buffer
-                        Toast.makeText(baseContext, "captured", Toast.LENGTH_SHORT).show()
+                        val bytes = ByteArray(buffer.remaining())
 
+                        Log.i("bytes size: ", bytes.size.toString())
+
+                        Toast.makeText(baseContext, "captured", Toast.LENGTH_SHORT).show()
+8
                         image.close()
                     }
                 }, null)
@@ -127,6 +131,7 @@ class MainActivity : AppCompatActivity() {
             else{
                 Toast.makeText(baseContext, "Нужны все разрешения", Toast.LENGTH_SHORT).show()
             }
+
 
         }
         catch (e: Exception){
