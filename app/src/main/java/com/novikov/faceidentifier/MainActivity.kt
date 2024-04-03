@@ -1,34 +1,35 @@
 package com.novikov.faceidentifier
 
 import android.Manifest
-import android.R.string
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.hardware.Camera
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.media.FaceDetector
 import android.media.ImageReader
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.os.Handler
 import android.os.HandlerThread
-import android.provider.Telephony.Mms.Part.FILENAME
 import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.novikov.faceidentifier.databinding.ActivityMainBinding
-import com.novikov.faceidentifier.service.ApiClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import okhttp3.internal.wait
-import java.io.File
-import java.util.Timer
-import java.util.TimerTask
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 
 class MainActivity : AppCompatActivity() {
@@ -40,12 +41,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageReader: ImageReader
     private lateinit var handlerThreadSession: HandlerThread
     private lateinit var handlerThreadImageReader: HandlerThread
+    private lateinit var faceDetector: FaceDetector
+    private lateinit var faces: Array<FaceDetector.Face?>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-
         binding = ActivityMainBinding.inflate(layoutInflater)
+
+        faceDetector = FaceDetector(960, 1280, 1)
+        faces = Array<FaceDetector.Face?>(1) { null }
 
         // Проверка разрешений на камеру и внешнее хранилище
         if(checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
@@ -56,7 +61,8 @@ class MainActivity : AppCompatActivity() {
         else{
             // Инициализация сервиса для камеры и считывателя изображения
             cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            imageReader = ImageReader.newInstance(1080, 1920, ImageFormat.JPEG, 1)
+            imageReader = ImageReader.newInstance(800, 1280, ImageFormat.JPEG, 1)
+            binding.mainSurfaceView.holder.setFixedSize(800, 1280)
 
             try {
                 // Получение id фронтальной камеры
@@ -99,38 +105,38 @@ class MainActivity : AppCompatActivity() {
                                 val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                                 builder.addTarget(binding.mainSurfaceView.holder.surface)
                                 builder.addTarget(imageReader.surface)
-                                builder.set(CaptureRequest.SENSOR_FRAME_DURATION, 1000000000L)
                                 builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
 
 
-//                                object: CountDownTimer(10000, 200){
-//                                    override fun onTick(millisUntilFinished: Long) {
-//                                        session.capture(builder.build(), null, null)
-//                                    }
-//
-//                                    override fun onFinish() {
-//
-//                                    }
-//
-//                                }.start()
-
-//                                Отправка повторяющегося запроса
-                                session.setRepeatingRequest(builder.build(), object :
-                                    CameraCaptureSession.CaptureCallback() {
-                                    //Захват изображения каждую итерацию запроса
-                                    override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                                object: CountDownTimer(60000, 125){
+                                    override fun onTick(millisUntilFinished: Long) {
                                         session.capture(builder.build(), null, null)
                                     }
-                                }, Handler(handlerThreadSession.looper))
 
-                                session.setRepeatingRequest(builder.build(), null, null)
+                                    override fun onFinish() {
+                                        this.cancel()
+                                        this.start()
+                                    }
+
+                                }.start()
+
+//                                Отправка повторяющегося запроса
+//                                session.setRepeatingRequest(builder.build(), object :
+//                                    CameraCaptureSession.CaptureCallback() {
+//                                    //Захват изображения каждую итерацию запроса
+//                                    override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+//                                        session.capture(builder.build(), null, null)
+//                                    }
+//                                }, Handler(handlerThreadSession.looper))
+
+//                                session.setRepeatingRequest(builder.build(), null, null)
                             }
 
                             override fun onConfigureFailed(session: CameraCaptureSession) {
                                 Log.e("capture session error", "error")
                             }
 
-                        }, null)
+                        }, Handler(handlerThreadSession.looper))
 
                     }, 1000)
 
@@ -141,15 +147,52 @@ class MainActivity : AppCompatActivity() {
                     imageReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener {
                         //Обработку изображения пихать сюда скорее всего
                         override fun onImageAvailable(reader: ImageReader?) {
-                            val image = reader!!.acquireLatestImage()
+                                try {
+                                    val image = reader!!.acquireLatestImage()
 
-                            val buffer = image.planes[0].buffer
-                            val bytes = ByteArray(buffer.remaining())
+                                    val buffer = image.planes[0].buffer
+                                    buffer.rewind()
+                                    val bytes = ByteArray(buffer.capacity())
+                                    buffer.get(bytes)
 
-                            val fos = openFileOutput("face.jpg", Context.MODE_PRIVATE)
-                            fos.write(bytes)
+                                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
 
-                            fos.close()
+
+                                    val copyBitmap = bitmap.copy(Bitmap.Config.RGB_565, true)
+
+                                    val matrix = Matrix()
+                                    matrix.setRotate(-90f)
+                                    val bitmapFinal = Bitmap.createBitmap(copyBitmap, 0, 0, copyBitmap.width, copyBitmap.height, matrix,true)
+
+                                    Log.i("width1", bitmapFinal.width.toString())
+                                    Log.i("height1", bitmapFinal.height.toString())
+
+//                                    binding.iv.post(object : Runnable {
+//                                        override fun run() {
+//                                            binding.iv.setImageBitmap(bitmap)
+//                                        }
+//                                    })
+
+//                                    Log.i("width1", bitmap.width.toString())
+//                                    Log.i("height1", bitmap.height.toString())
+//
+//                                    Log.i("width2", copyBitmap.width.toString())
+//                                    Log.i("height2", copyBitmap.height.toString())
+
+                                    val count = faceDetector.findFaces(bitmapFinal, faces)
+
+                                    if (count >= 1)
+                                        Log.i("faceDetector", count.toString())
+
+                                    val fos = openFileOutput("face.jpg", Context.MODE_PRIVATE)
+
+                                    val stream = ByteArrayOutputStream()
+
+                                    bitmapFinal.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+
+                                    fos.write(stream.toByteArray())
+
+                                    fos.close()
 
 //                            File("face.jpg").writeBytes(bytes)
 //                            val file = OpenFileInput
@@ -159,12 +202,17 @@ class MainActivity : AppCompatActivity() {
 //                                ApiClient().sendPicture(file)
 //                            }
 
-                            Log.i("bytes size: ", bytes.size.toString())
+                                    Log.i("bytes size: ", bytes.size.toString())
 
-                            Log.i("imageReader", "captured")
-                            Toast.makeText(baseContext, "captured", Toast.LENGTH_SHORT).show()
-                            image.close()
-                        }
+                                    Log.i("imageReader", "captured")
+                                    Toast.makeText(baseContext, "captured", Toast.LENGTH_SHORT).show()
+                                    image.close()
+                                }
+                                catch (ex: Exception){
+                                    Log.e("imageReader", ex.message.toString())
+                                }
+
+                            }
                     }, Handler(handlerThreadImageReader.looper))
                 }
                 else{
